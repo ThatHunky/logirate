@@ -13,7 +13,12 @@ const USAGE_LONG: u16 = 0x0002;
 const REPORT_SHORT: u8 = 0x10;
 const REPORT_LONG: u8 = 0x11;
 const LONG_LEN: usize = 20;
-const SW_ID: u8 = 0x0b;
+
+/// HID++ software ID (1..=15), different per process so the daemon, GUI and CLI,
+/// which all see every reply on the shared receiver, don't take each other's answers.
+fn sw_id() -> u8 {
+    (std::process::id() % 15 + 1) as u8
+}
 const TIMEOUT: Duration = Duration::from_millis(800);
 
 /// HID++ 2.0 feature IDs used here.
@@ -94,6 +99,11 @@ pub struct Dpi {
     pub lod: Option<u8>,
 }
 
+/// Same resolution; the lift-off setting only counts when we know which one we want.
+fn dpi_matches(want: Dpi, current: Dpi) -> bool {
+    want.x == current.x && want.y == current.y && (want.lod.is_none() || want.lod == current.lod)
+}
+
 impl fmt::Display for Dpi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.x == self.y { write!(f, "{}", self.x) } else { write!(f, "{}x{}", self.x, self.y) }
@@ -141,7 +151,8 @@ impl Device {
                     Ok((major, _)) if major >= 2 => {}
                     _ => continue,
                 }
-                if dev.has(feature::EXT_REPORT_RATE)? || dev.has(feature::REPORT_RATE)? {
+                // Any error here just means "not this device"; keep looking.
+                if matches!(dev.has(feature::EXT_REPORT_RATE), Ok(true)) || matches!(dev.has(feature::REPORT_RATE), Ok(true)) {
                     return Ok(dev);
                 }
             }
@@ -158,11 +169,14 @@ impl Device {
     }
 
     fn request(&self, feat_index: u8, function: u8, params: &[u8]) -> Result<Vec<u8>> {
+        if params.len() > LONG_LEN - 4 {
+            bail!("at most {} parameter bytes fit in a HID++ report", LONG_LEN - 4);
+        }
         let mut buf = [0u8; LONG_LEN];
         buf[0] = REPORT_LONG;
         buf[1] = self.index;
         buf[2] = feat_index;
-        buf[3] = (function << 4) | SW_ID;
+        buf[3] = (function << 4) | sw_id();
         buf[4..4 + params.len()].copy_from_slice(params);
 
         let mut scratch = [0u8; 64];
@@ -243,8 +257,13 @@ impl Device {
             let mask = u16::from_be_bytes([r[0], r[1]]);
             return Ok((0..EXT_RATES.len()).filter(|b| mask >> b & 1 == 1).map(|b| EXT_RATES[b]).collect());
         }
+        // Bit n = an interval of n+1 ms; only the standard rates are offered.
         let mask = self.call(feature::REPORT_RATE, 0, &[])?[0];
-        Ok((0..8u32).filter(|b| mask >> b & 1 == 1).map(|b| 1000 / (b + 1)).collect())
+        Ok([(0u32, 1000), (1, 500), (3, 250), (7, 125)]
+            .into_iter()
+            .filter(|(bit, _)| mask >> bit & 1 == 1)
+            .map(|(_, hz)| hz)
+            .collect())
     }
 
     /// 0x8061 reads the rate per connection type: 0 = wired, 1 = wireless.
@@ -339,11 +358,10 @@ impl Device {
 
     /// Hands control back to the mouse's own onboard profile.
     pub fn use_onboard(&mut self) -> Result<()> {
-        if let Some(mode) = self.mode()? {
-            if mode != Mode::Onboard {
+        if let Some(mode) = self.mode()?
+            && mode != Mode::Onboard {
                 self.set_mode(Mode::Onboard)?;
             }
-        }
         Ok(())
     }
 
@@ -357,11 +375,15 @@ impl Device {
             self.onboard_dpi = if self.has_dpi()? { Some(self.dpi()?) } else { None };
             self.set_mode(Mode::Host)?;
         }
-        if let Some(want) = self.wanted_dpi(dpi) {
-            if self.dpi()? != want {
-                self.set_dpi(want).with_context(|| format!("setting {want} DPI"))?;
+        if let Some(mut want) = self.wanted_dpi(dpi)
+            && self.has_dpi()? {
+                let current = self.dpi()?;
+                if !dpi_matches(want, current) {
+                    // Unknown lift-off setting: keep whatever the mouse has instead of writing 0.
+                    want.lod = want.lod.or(current.lod);
+                    self.set_dpi(want).with_context(|| format!("setting {want} DPI"))?;
+                }
             }
-        }
         self.write_rate(hz)?;
         let now = self.rate()?;
         if now != hz {
@@ -377,8 +399,8 @@ impl Device {
             return Ok(false);
         }
         match self.wanted_dpi(dpi) {
-            Some(want) => Ok(self.dpi()? == want),
-            None => Ok(true),
+            Some(want) if self.has_dpi()? => Ok(dpi_matches(want, self.dpi()?)),
+            _ => Ok(true),
         }
     }
 

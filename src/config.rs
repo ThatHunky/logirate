@@ -247,6 +247,14 @@ impl Config {
             if processes.is_empty() && (title.is_none() || when == When::Running) {
                 bail!("rule {}: needs a process (or, for focused rules, a title)", i + 1);
             }
+            if when == When::Running {
+                if title.is_some() {
+                    bail!("rule {}: a window title only works with when = \"focused\"", i + 1);
+                }
+                if processes.iter().any(|p| p.contains('\\') || p.contains('/')) {
+                    bail!("rule {}: running rules match program names only, not paths", i + 1);
+                }
+            }
             let target = match r.rate.hz().with_context(|| format!("rule {}", i + 1))? {
                 None => Target::Onboard,
                 Some(hz) => Target::Host { hz, dpi: r.dpi },
@@ -379,6 +387,8 @@ mod tests {
         assert!(Config::parse("[[rule]]\nrate=1000").is_err());
         assert!(Config::parse("[[rule]]\nprocess='x.exe'\nrate=1000\nwhen='sometimes'").is_err());
         assert!(Config::parse("typo = 1").is_err());
+        assert!(Config::parse("[[rule]]\nprocess='d:\\games\\*'\nwhen='running'\nrate=1000").is_err());
+        assert!(Config::parse("[[rule]]\nprocess='obs64.exe'\ntitle='x'\nwhen='running'\nrate=1000").is_err());
         assert_eq!(parse_rate("1000Hz").unwrap(), Some(1000));
     }
 

@@ -17,11 +17,42 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("logirate")
-            .with_inner_size([900.0, 600.0])
-            .with_min_inner_size([700.0, 420.0]),
+            .with_inner_size([1180.0, 760.0])
+            .with_min_inner_size([900.0, 520.0]),
         ..Default::default()
     };
-    eframe::run_native("logirate", options, Box::new(|_cc| Ok(Box::new(App::new()))))
+    eframe::run_native(
+        "logirate",
+        options,
+        Box::new(|cc| {
+            setup_style(&cc.egui_ctx);
+            Ok(Box::new(App::new()))
+        }),
+    )
+}
+
+/// Bigger text, roomier controls and higher contrast than egui's compact defaults.
+fn setup_style(ctx: &egui::Context) {
+    ctx.set_zoom_factor(1.2);
+    ctx.all_styles_mut(|style| {
+        use egui::{FontId, TextStyle};
+        style.text_styles = [
+            (TextStyle::Heading, FontId::proportional(20.0)),
+            (TextStyle::Body, FontId::proportional(15.0)),
+            (TextStyle::Button, FontId::proportional(15.0)),
+            (TextStyle::Small, FontId::proportional(12.5)),
+            (TextStyle::Monospace, FontId::monospace(13.0)),
+        ]
+        .into();
+        style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+        style.spacing.button_padding = egui::vec2(10.0, 5.0);
+        style.spacing.interact_size.y = 28.0;
+        style.visuals.override_text_color = Some(if style.visuals.dark_mode {
+            egui::Color32::from_gray(232)
+        } else {
+            egui::Color32::from_gray(20)
+        });
+    });
 }
 
 #[derive(Clone, Default)]
@@ -190,8 +221,10 @@ impl eframe::App for App {
         ui.ctx().request_repaint_after(Duration::from_secs(2));
 
         egui::Panel::top("status").show(ui, |ui| {
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
+            ui.add_space(10.0);
+            ui.heading("logirate");
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
                 ui.strong("Mouse");
                 ui.label(&self.mouse);
                 if ui.button("Refresh").clicked() {
@@ -204,6 +237,12 @@ impl eframe::App for App {
                     ui.colored_label(egui::Color32::from_rgb(60, 160, 90), "running");
                     if ui.button("Stop").clicked() {
                         stop_service();
+                        // The service can't clean up after a forced stop; hand the mouse back ourselves.
+                        self.message = match Device::open().and_then(|mut d| d.use_onboard()) {
+                            Ok(()) => "Service stopped; the mouse is back on its onboard profile.".into(),
+                            Err(e) => format!("Service stopped, but the mouse couldn't be reset: {e:#}"),
+                        };
+                        self.refresh_mouse();
                         self.last_poll = Instant::now() - Duration::from_secs(60);
                     }
                 } else {
@@ -229,7 +268,7 @@ impl eframe::App for App {
             ui.add_space(4.0);
             ui.strong("Service log");
             egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(&self.log_tail).monospace().size(11.0)).wrap());
+                ui.add(egui::Label::new(egui::RichText::new(&self.log_tail).monospace()).wrap());
             });
         });
 
@@ -239,34 +278,41 @@ impl eframe::App for App {
                 rate_combo(ui, "default-rate", &mut self.default_rate);
                 if self.default_rate.is_some() {
                     ui.label("DPI");
-                    ui.add(egui::TextEdit::singleline(&mut self.default_dpi).desired_width(60.0).hint_text("keep"));
+                    ui.add(egui::TextEdit::singleline(&mut self.default_dpi).desired_width(80.0).hint_text("keep"));
                 }
                 ui.separator();
                 ui.label("Check every");
                 ui.add(egui::DragValue::new(&mut self.poll_ms).range(100..=5000).suffix(" ms"));
             });
-            ui.add_space(8.0);
+            ui.add_space(12.0);
+            ui.heading("Rules");
             ui.label(
-                "Rules, checked top to bottom (first match wins). Apps: comma-separated, * and ? work; \
-                 a pattern with \\ matches the full path. \"Onboard\" hands control back to the mouse's own profile.",
+                egui::RichText::new(
+                    "Checked top to bottom; the first match wins. Apps: comma-separated, * and ? work, \
+                     a pattern with \\ matches the full path. \"onboard\" hands control back to the mouse's own profile.",
+                )
+                .small(),
             );
-            ui.add_space(4.0);
+            ui.add_space(6.0);
 
             let mut remove = None;
             let mut swap = None;
             let count = self.rules.len();
-            egui::ScrollArea::vertical().max_height(ui.available_height() - 70.0).show(ui, |ui| {
-                egui::Grid::new("rules").striped(true).num_columns(7).spacing([8.0, 6.0]).show(ui, |ui| {
+            // Text columns share whatever width is left after the fixed-size controls.
+            let flexible = (ui.available_width() - 520.0).max(420.0);
+            let (w_name, w_apps, w_title) = (flexible * 0.2, flexible * 0.5, flexible * 0.3);
+            egui::ScrollArea::vertical().max_height((ui.available_height() - 70.0).max(80.0)).show(ui, |ui| {
+                egui::Grid::new("rules").striped(true).num_columns(7).spacing([12.0, 10.0]).show(ui, |ui| {
                     for h in ["Name", "Apps", "Window title contains", "Active", "Rate", "DPI", ""] {
                         ui.strong(h);
                     }
                     ui.end_row();
                     for (i, r) in self.rules.iter_mut().enumerate() {
-                        ui.add(egui::TextEdit::singleline(&mut r.name).desired_width(110.0).hint_text("optional"));
-                        ui.add(egui::TextEdit::singleline(&mut r.processes).desired_width(200.0).hint_text("cs2.exe"));
-                        ui.add(egui::TextEdit::singleline(&mut r.title).desired_width(130.0).hint_text("optional"));
+                        ui.add(egui::TextEdit::singleline(&mut r.name).desired_width(w_name).hint_text("optional"));
+                        ui.add(egui::TextEdit::singleline(&mut r.processes).desired_width(w_apps).hint_text("cs2.exe, valorant*.exe"));
+                        ui.add(egui::TextEdit::singleline(&mut r.title).desired_width(w_title).hint_text("optional"));
                         egui::ComboBox::from_id_salt(("when", i))
-                            .width(90.0)
+                            .width(130.0)
                             .selected_text(if r.running { "while running" } else { "when focused" })
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(&mut r.running, false, "when focused");
@@ -275,7 +321,7 @@ impl eframe::App for App {
                         rate_combo(ui, ("rate", i), &mut r.rate);
                         ui.add_enabled(
                             r.rate.is_some(),
-                            egui::TextEdit::singleline(&mut r.dpi).desired_width(55.0).hint_text("keep"),
+                            egui::TextEdit::singleline(&mut r.dpi).desired_width(80.0).hint_text("keep"),
                         );
                         ui.horizontal(|ui| {
                             if ui.add_enabled(i > 0, egui::Button::new("Up")).clicked() {
@@ -310,7 +356,7 @@ impl eframe::App for App {
                 ui.separator();
                 ui.label("Add a running app:");
                 egui::ComboBox::from_id_salt("pick")
-                    .width(200.0)
+                    .width(280.0)
                     .selected_text(if self.pick.is_empty() { "choose…" } else { self.pick.as_str() })
                     .show_ui(ui, |ui| {
                         for app in &self.running_apps {
@@ -343,7 +389,7 @@ impl eframe::App for App {
 
 fn rate_combo(ui: &mut egui::Ui, id: impl egui::AsIdSalt, rate: &mut Option<u32>) {
     let label = |r: Option<u32>| r.map(|hz| format!("{hz} Hz")).unwrap_or_else(|| "onboard".into());
-    egui::ComboBox::from_id_salt(id).width(90.0).selected_text(label(*rate)).show_ui(ui, |ui| {
+    egui::ComboBox::from_id_salt(id).width(115.0).selected_text(label(*rate)).show_ui(ui, |ui| {
         ui.selectable_value(rate, None, "onboard");
         for hz in VALID_RATES {
             ui.selectable_value(rate, Some(hz), format!("{hz} Hz"));
