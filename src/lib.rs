@@ -7,4 +7,5 @@
 pub mod config;
 pub mod foreground;
 pub mod hidpp;
+pub mod paths;
 pub mod watch;

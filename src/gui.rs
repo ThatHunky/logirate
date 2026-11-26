@@ -17,6 +17,9 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("logirate")
+            .with_icon(std::sync::Arc::new(
+                eframe::icon_data::from_png_bytes(include_bytes!("../assets/logirate-256.png")).unwrap_or_default(),
+            ))
             .with_inner_size([1180.0, 760.0])
             .with_min_inner_size([900.0, 520.0]),
         ..Default::default()
@@ -414,7 +417,22 @@ fn start_service() -> Result<(), String> {
         .map_err(|e| format!("Couldn't start {}: {e}", daemon_path().display()))
 }
 
+/// Asks the service to close (it resets the mouse itself); force-kills it if it doesn't go.
 fn stop_service() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_CLOSE};
+    let class: Vec<u16> = "logirated-window".encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let hwnd = FindWindowW(class.as_ptr(), std::ptr::null());
+        if !hwnd.is_null() {
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+        }
+    }
+    for _ in 0..30 {
+        if !running_exes().contains("logirated.exe") {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
     let _ = Command::new("taskkill").args(["/IM", "logirated.exe", "/F"]).creation_flags(NO_WINDOW).status();
 }
 
@@ -441,8 +459,7 @@ fn set_autostart(on: bool) -> Result<(), String> {
 }
 
 fn read_log_tail(lines: usize) -> String {
-    let path = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_default().join("logirate").join("logirate.log");
-    match std::fs::read_to_string(path) {
+    match std::fs::read_to_string(logirate::paths::log_file()) {
         Ok(text) => {
             let all: Vec<&str> = text.lines().collect();
             all[all.len().saturating_sub(lines)..].join("\n")

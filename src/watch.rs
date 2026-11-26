@@ -4,7 +4,24 @@ use crate::config::{Config, Target};
 use crate::foreground::{foreground, running_exes};
 use crate::hidpp::Device;
 use std::collections::HashSet;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
+
+/// Set when the service is shutting down: the loop stops touching the mouse.
+pub static STOP: AtomicBool = AtomicBool::new(false);
+/// Held while the loop talks to the mouse, so a shutdown can wait for an in-flight change.
+static DEVICE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Stops the loop and hands the mouse back to its onboard profile.
+pub fn shutdown(log: &mut dyn FnMut(&str)) {
+    STOP.store(true, Ordering::SeqCst);
+    let _guard = DEVICE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    match Device::open().and_then(|mut d| d.use_onboard()) {
+        Ok(()) => log("stopping: mouse handed back to its onboard profile"),
+        Err(e) => log(&format!("stopping: couldn't reset the mouse: {e:#}")),
+    }
+}
 
 const VERIFY_EVERY: Duration = Duration::from_secs(3);
 const REOPEN_EVERY: Duration = Duration::from_secs(3);
@@ -21,6 +38,10 @@ pub fn run(log: &mut dyn FnMut(&str)) -> ! {
     log(&format!("logirate started, config {}", Config::path().display()));
     loop {
         std::thread::sleep(Duration::from_millis(config.poll_ms));
+        if STOP.load(Ordering::SeqCst) {
+            std::thread::park();
+            continue;
+        }
 
         if mtime() != config_mtime {
             config_mtime = mtime();
@@ -41,6 +62,10 @@ pub fn run(log: &mut dyn FnMut(&str)) -> ! {
             continue;
         }
 
+        let _guard = DEVICE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if STOP.load(Ordering::SeqCst) {
+            continue;
+        }
         if device.is_none() {
             if last_open.elapsed() < REOPEN_EVERY {
                 continue;

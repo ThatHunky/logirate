@@ -208,8 +208,7 @@ impl Config {
     }
 
     pub fn path() -> PathBuf {
-        let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-        base.join("logirate").join("config.toml")
+        crate::paths::config_file()
     }
 
     /// Creates the default config if there is none, and returns its text.
