@@ -308,9 +308,11 @@ impl eframe::App for App {
                     }
                     ui.end_row();
                     for (i, r) in self.rules.iter_mut().enumerate() {
-                        ui.add(egui::TextEdit::singleline(&mut r.name).desired_width(w_name).hint_text("optional"));
-                        ui.add(egui::TextEdit::singleline(&mut r.processes).desired_width(w_apps).hint_text("cs2.exe, valorant*.exe"));
-                        ui.add(egui::TextEdit::singleline(&mut r.title).desired_width(w_title).hint_text("optional"));
+                        // add_sized: a Grid otherwise caps each cell at last frame's (narrow) column width.
+                        let h = ui.spacing().interact_size.y;
+                        ui.add_sized([w_name, h], egui::TextEdit::singleline(&mut r.name).hint_text("optional"));
+                        ui.add_sized([w_apps, h], egui::TextEdit::singleline(&mut r.processes).hint_text("cs2.exe, valorant*.exe"));
+                        ui.add_sized([w_title, h], egui::TextEdit::singleline(&mut r.title).hint_text("optional"));
                         egui::ComboBox::from_id_salt(("when", i))
                             .width(130.0)
                             .selected_text(if r.running { "while running" } else { "when focused" })
@@ -319,10 +321,9 @@ impl eframe::App for App {
                                 ui.selectable_value(&mut r.running, true, "while running");
                             });
                         rate_combo(ui, ("rate", i), &mut r.rate);
-                        ui.add_enabled(
-                            r.rate.is_some(),
-                            egui::TextEdit::singleline(&mut r.dpi).desired_width(80.0).hint_text("keep"),
-                        );
+                        ui.add_enabled_ui(r.rate.is_some(), |ui| {
+                            ui.add_sized([80.0, h], egui::TextEdit::singleline(&mut r.dpi).hint_text("keep"));
+                        });
                         ui.horizontal(|ui| {
                             if ui.add_enabled(i > 0, egui::Button::new("Up")).clicked() {
                                 swap = Some((i, i - 1));

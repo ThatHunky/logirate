@@ -1,0 +1,75 @@
+<!--
+  logirate per-user MSI (WiX 5). Build: installer\build.ps1
+  Installs to %LOCALAPPDATA%\Programs\logirate without admin rights.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="logirate"
+           Manufacturer="ThatHunky"
+           Version="$(var.Version)"
+           UpgradeCode="CBB2B526-E3F6-4ADA-B945-34B163EAB889"
+           Scope="perUser"
+           Compressed="yes">
+
+    <SummaryInformation Description="Per-app polling rate for Logitech mice" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of logirate is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Stop the running service and window before files are replaced or removed. -->
+    <util:CloseApplication Id="CloseService" Target="logirated.exe" CloseMessage="no" TerminateProcess="0" RebootPrompt="no" />
+    <util:CloseApplication Id="CloseGui" Target="logirate-gui.exe" CloseMessage="yes" TerminateProcess="0" RebootPrompt="no" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="logirate" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Component Id="CliExe" Guid="6183F3EE-65F3-499E-9860-FE54B0611CBC">
+        <File Id="logirate.exe" Source="$(var.BinDir)\logirate.exe" />
+        <RegistryValue Root="HKCU" Key="Software\logirate" Name="cli" Type="integer" Value="1" KeyPath="yes" />
+        <!-- So `logirate` works from any terminal. -->
+        <Environment Id="PathEntry" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="no" />
+        <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+        <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall" />
+      </Component>
+      <Component Id="ServiceExe" Guid="C1B1DF99-EDBD-41C7-A4F5-DF31D07AC569">
+        <File Id="logirated.exe" Source="$(var.BinDir)\logirated.exe" />
+        <RegistryValue Root="HKCU" Key="Software\logirate" Name="service" Type="integer" Value="1" KeyPath="yes" />
+        <!-- Start the background service at login (the window's "Start at login" switch edits this). -->
+        <RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="logirate"
+                       Type="string" Value="&quot;[INSTALLFOLDER]logirated.exe&quot;" />
+      </Component>
+      <Component Id="GuiExe" Guid="619C2839-4B58-4258-B164-3097C61A5323">
+        <File Id="logirate_gui.exe" Source="$(var.BinDir)\logirate-gui.exe" />
+        <RegistryValue Root="HKCU" Key="Software\logirate" Name="gui" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Id="Docs" Guid="FFA5337C-A844-4E4C-80A9-1FCD94F63C19">
+        <File Id="README.md" Source="$(var.SrcDir)\README.md" />
+        <File Id="LICENSE" Source="$(var.SrcDir)\LICENSE" />
+        <RegistryValue Root="HKCU" Key="Software\logirate" Name="docs" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="Shortcuts" Directory="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="*">
+        <Shortcut Id="GuiShortcut" Name="logirate" Description="Per-app polling rate for Logitech mice"
+                  Target="[INSTALLFOLDER]logirate-gui.exe" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\logirate" Name="shortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="logirate">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentGroupRef Id="Shortcuts" />
+    </Feature>
+
+    <!-- Start the service right after a fresh install or upgrade, so it works without a sign-out. -->
+    <CustomAction Id="StartService" FileRef="logirated.exe" ExeCommand="" Return="asyncNoWait" Impersonate="yes" />
+    <InstallExecuteSequence>
+      <Custom Action="StartService" After="InstallFinalize" Condition="NOT REMOVE" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>
